@@ -127,7 +127,7 @@
     };
 
     // ★ここでWebSocketサーバーのアドレスを自分の環境に合わせて変更
-    const ws = new WebSocket("ws://100.103.206.85:11180/sub?p=comments");
+    const ws = new WebSocket("ws://180.29.179.9:11180/sub?p=comments");
 
     ws.onopen = () => {
       statusDiv.textContent = "WebSocket：接続成功";
