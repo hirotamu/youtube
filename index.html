@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ワンコメ コメント受信（ギフト金額・絵文字画像・読み上げ除外）</title>
+  <style>
+    body { font-family: sans-serif; background: #222; color: #fff; }
+    #status {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      background: #444;
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 6px;
+      z-index: 1001;
+      font-size: 1em;
+    }
+    #comments { margin: 60px 20px 20px 20px; }
+    .comment {
+      display: flex;
+      align-items: center;
+      background: #333;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      position: relative;
+    }
+    .icon {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      margin-right: 10px;
+      background: #444;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+    .comment-content {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
+    }
+    .author {
+      color: #ffd700;
+      font-weight: bold;
+      margin-right: 8px;
+      white-space: nowrap;
+    }
+    .body {
+      color: #fff;
+      word-break: break-all;
+      font-size: 1.3em;
+      font-weight: bold;
+    }
+    .service {
+      font-size: 0.75em;
+      color: #aaa;
+      margin-left: 6px;
+      margin-top: 2px;
+      align-self: flex-end;
+    }
+    #toggleSpeech {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      padding: 8px 16px;
+      background: #ffd700;
+      color: #222;
+      border: none;
+      border-radius: 6px;
+      font-size: 1em;
+      cursor: pointer;
+      z-index: 1000;
+    }
+    #toggleSpeech.off {
+      background: #666;
+      color: #fff;
+    }
+    .gift {
+      background: #4e2a8e !important;
+      border: 2px solid #ffd700;
+      box-shadow: 0 0 16px #ffd70080;
+    }
+    .gift .body {
+      color: #ffd700;
+      text-shadow: 0 0 8px #fff, 0 0 2px #ffd700;
+    }
+    .amount {
+      color: #ffd700;
+      font-size: 1.2em;
+      font-weight: bold;
+      margin-top: 4px;
+      align-self: flex-start;
+      text-shadow: 0 0 8px #fff, 0 0 2px #ffd700;
+    }
+  </style>
+</head>
+<body>
+  <div id="status">WebSocket：未接続</div>
+  <button id="toggleSpeech">🔊 読み上げを有効にする</button>
+  <h1>コメント一覧（新着が上・読み上げ順次）</h1>
+  <div id="comments"></div>
+  <script>
+    let speechEnabled = false;
+    let speechQueue = [];
+    let isSpeaking = false;
+
+    const statusDiv = document.getElementById("status");
+
+    document.getElementById("toggleSpeech").onclick = function() {
+      speechEnabled = !speechEnabled;
+      if (speechEnabled) {
+        const utter = new SpeechSynthesisUtterance("読み上げを有効にしました");
+        utter.lang = 'ja-JP';
+        window.speechSynthesis.speak(utter);
+        this.textContent = "🔇 読み上げを無効にする";
+        this.classList.remove('off');
+      } else {
+        window.speechSynthesis.cancel();
+        speechQueue = [];
+        isSpeaking = false;
+        this.textContent = "🔊 読み上げを有効にする";
+        this.classList.add('off');
+      }
+    };
+
+    // ★ここでWebSocketサーバーのアドレスを自分の環境に合わせて変更
+    const ws = new WebSocket("ws://100.103.206.85:11180/sub?p=comments");
+
+    ws.onopen = () => {
+      statusDiv.textContent = "WebSocket：接続成功";
+      statusDiv.style.background = "#2a4";
+    };
+
+    ws.onclose = () => {
+      statusDiv.textContent = "WebSocket：接続が閉じられました";
+      statusDiv.style.background = "#a44";
+    };
+
+    ws.onerror = e => {
+      statusDiv.textContent = "WebSocket：エラー発生";
+      statusDiv.style.background = "#a44";
+      console.error("WebSocketエラー", e);
+    };
+
+    ws.onmessage = event => {
+      statusDiv.textContent = "WebSocket：通信中（受信あり）";
+      statusDiv.style.background = "#48a";
+      const msg = JSON.parse(event.data);
+      if (
+        (msg.type === "comments" || msg.type === "connected") &&
+        msg.data &&
+        Array.isArray(msg.data.comments)
+      ) {
+        msg.data.comments.forEach(obj => {
+          if (
+            obj.data &&
+            typeof obj.data.comment === "string" &&
+            obj.data.comment.trim() !== ""
+          ) {
+            const service =
+              (obj.data.service || obj.service || "不明").toString();
+            // ギフトコメント判定
+            const isGift = !!obj.data.hasGift || !!obj.data.giftType;
+            // 金額取得（paidText優先、なければpriceを使う）
+            let amount = "";
+            if (isGift) {
+              if (obj.data.paidText) {
+                amount = obj.data.paidText;
+              } else if (typeof obj.data.price === "number") {
+                amount = obj.data.price + "";
+              }
+            }
+            // profileImageのみ使用
+            const iconUrl = obj.data.profileImage;
+            // ギフトコメントの中身をログ出力
+            if (isGift) {
+              console.log("ギフトコメントのデータ:", obj.data);
+            }
+            // 読み上げ用テキスト（imgタグなどを除去）
+            const speechText = stripHTML(obj.data.comment);
+            addComment(
+              obj.data.displayName,
+              obj.data.comment,
+              iconUrl,
+              service,
+              isGift,
+              amount,
+              speechText // ←追加
+            );
+            if (msg.type === "comments" && speechEnabled) {
+              enqueueSpeech(speechText);
+            }
+          }
+        });
+      }
+    };
+
+    // HTMLタグを除去してテキストだけ返す関数
+    function stripHTML(html) {
+      // imgタグを除去（他のタグも消したい場合は正規表現を調整）
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      // imgタグを全て削除
+      tmp.querySelectorAll('img').forEach(img => img.remove());
+      return tmp.textContent || "";
+    }
+
+    function addComment(displayName, comment, iconUrl, service, isGift, amount, speechText) {
+      const div = document.createElement("div");
+      div.className = "comment";
+      if (isGift) div.classList.add("gift");
+
+      const img = document.createElement("img");
+      img.className = "icon";
+      img.src = iconUrl && iconUrl.trim() !== "" ? iconUrl : "https://static.wixstatic.com/media/ea8c7e_3c7c0b1e9c9b4a1b8c5e8b7e0b1c9b4a1~mv2.png";
+      img.alt = "icon";
+      div.appendChild(img);
+
+      const content = document.createElement("div");
+      content.className = "comment-content";
+
+      const author = document.createElement("span");
+      author.className = "author";
+      author.textContent = displayName && displayName.trim() !== "" ? displayName : "匿名";
+      content.appendChild(author);
+
+      const body = document.createElement("span");
+      body.className = "body";
+      // 絵文字画像などを含めて表示
+      body.innerHTML = comment;
+      content.appendChild(body);
+
+      // 金額表示（ギフトコメントかつ金額がある場合のみ）
+      if (isGift && amount) {
+        const amountSpan = document.createElement("span");
+        amountSpan.className = "amount";
+        amountSpan.textContent = amount;
+        content.appendChild(amountSpan);
+      }
+
+      const serviceSpan = document.createElement("span");
+      serviceSpan.className = "service";
+      serviceSpan.textContent = service;
+      content.appendChild(serviceSpan);
+
+      div.appendChild(content);
+
+      const commentsDiv = document.getElementById("comments");
+      if (commentsDiv.firstChild) {
+        commentsDiv.insertBefore(div, commentsDiv.firstChild);
+      } else {
+        commentsDiv.appendChild(div);
+      }
+    }
+
+    function enqueueSpeech(text) {
+      speechQueue.push(text);
+      if (!isSpeaking) {
+        playNextSpeech();
+      }
+    }
+
+    function playNextSpeech() {
+      if (!speechEnabled || speechQueue.length === 0) {
+        isSpeaking = false;
+        return;
+      }
+      isSpeaking = true;
+      const text = speechQueue.shift();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'ja-JP';
+      utter.onend = function() {
+        playNextSpeech();
+      };
+      utter.onerror = function() {
+        playNextSpeech();
+      };
+      window.speechSynthesis.speak(utter);
+    }
+  </script>
+</body>
+</html>
