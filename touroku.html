@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>登録者数 演出デモ</title>
+  <style>
+    #sub-count {
+      font-size: 48px;
+      font-weight: bold;
+      display: inline-block;
+      color: #333;
+      transition: transform 0.5s;
+    }
+    .highlight {
+      color: #2e82de;
+      animation: pop 1s;
+    }
+    @keyframes pop {
+      0%   { transform: scale(1);}
+      50%  { transform: scale(1.3);}
+      100% { transform: scale(1);}
+    }
+  </style>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  <button onclick="authenticate()">認証して登録者数取得開始</button>
+  <div>登録者数: <span id="sub-count">0</span></div>
+  <script>
+    let previousCount = 0;
+    const subCountElem = document.getElementById("sub-count");
+    let accessToken = "";
+    // ここにご自身のクライアントIDを書き入れてください
+    const client_id = "209122419123-aindukltdgu1v81jejobivshafb72dqo.apps.googleusercontent.com";
+
+    function authenticate() {
+      google.accounts.oauth2.initTokenClient({
+        client_id: client_id,
+        scope: 'https://www.googleapis.com/auth/youtube.readonly',
+        callback: (tokenResponse) => {
+          accessToken = tokenResponse.access_token;
+          updateSubCount();
+          setInterval(updateSubCount, 30000);
+        },
+      }).requestAccessToken();
+    }
+
+    async function fetchSubscriberCount() {
+      const url = `https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true`;
+      try {
+        const resp = await fetch(url, {
+          headers: {
+            Authorization: 'Bearer ' + accessToken
+          }
+        });
+        const data = await resp.json();
+        if(data.items && data.items[0]) {
+          return parseInt(data.items[0].statistics.subscriberCount, 10);
+        }
+      } catch(e) {}
+      return previousCount;
+    }
+
+    async function updateSubCount() {
+      const currentCount = await fetchSubscriberCount();
+      if (currentCount > previousCount) {
+        subCountElem.textContent = currentCount;
+        subCountElem.classList.add("highlight");
+        setTimeout(()=>subCountElem.classList.remove("highlight"), 1000);
+      } else {
+        subCountElem.textContent = currentCount;
+      }
+      previousCount = currentCount;
+    }
+  </script>
+</body>
+</html>
